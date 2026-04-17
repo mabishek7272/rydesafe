@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  trackbuddy:
+    build: .
+    container_name: trackbuddy-app
+    restart: always
+    ports:
+      - "3500:3000"
+    environment:
+      - DATABASE_URL=file:./dev.db
+      - NEXTAUTH_SECRET=190125@Amgi_Secret # Use a better secret in prod
+      - NEXTAUTH_URL=http://rideshare.com.my
+      - BUKKU_API_KEY=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL3RpYmFzZWxhbWF0LmJ1a2t1Lm15L3NldHRpbmdzL2FwaSIsImlhdCI6MTc3NTgwNTg2OCwibmJmIjoxNzc1ODA1ODY4LCJqdGkiOiI0OHoxVDhFUklheTV0QWFrIiwic3ViIjoiMTA4OTQyIiwicHJ2IjoiMjlmYzhjZTc0ZjVjMGY5MTZjY2E3NGE4NjZiYzhlMzFmZTA2NGQ3YSJ9.ggVSVmeu1UdQ9U8G_OdbNATixDCJ7cIoku-OJYet67o
+    volumes:
+      - ./dev.db:/app/dev.db
+      - ./prisma:/app/prisma
+
+  # Optional: Nginx for SSL (Certbot)
+  # nginx:
+  #   image: nginx:alpine
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf

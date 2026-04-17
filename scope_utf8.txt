@@ -1,0 +1,12 @@
+School BUS App
+Driver App
+Parents App
+Arun- can look at this app…for comparison…. 
+Comments on our App
+On this page- suggested to capture- Parent Contact, Grade, Level, DOB, Age- sample below
+Suppose to have search function here right?
+This one – can it be any way that from the backend we can control the time that they can choose. Fixed time of 3:00 and 4:00, etc?
+Parent contact number – if can column for two numbers
+This looks nicer then what we have. We should have to upload photo but not compulsory for now.
+This one- driver have to checkout to populate-ok
+This same like as our self-pickup but it appears as alternative in the list so driver knows parent is self picking up?

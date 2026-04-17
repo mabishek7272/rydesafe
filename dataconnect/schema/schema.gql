@@ -1,0 +1,52 @@
+type User @table {
+  username: String!
+  email: String!
+  userType: String
+  campusID: String
+}
+
+type Shuttle @table {
+  vehicleNumber: String!
+  capacity: Int!
+  currentRoute: Route
+  driverName: String
+  lastMaintenanceDate: Date
+}
+
+type Route @table {
+  routeName: String!
+  description: String!
+  startTime: Timestamp
+  endTime: Timestamp
+  operatingDays: [String]
+}
+
+type Stop @table {
+  stopName: String!
+  latitude: Float!
+  longitude: Float!
+  description: String
+  accessibilityFeatures: String
+}
+
+type ShuttleLocation @table {
+  shuttle: Shuttle!
+  timestamp: Timestamp!
+  latitude: Float!
+  longitude: Float!
+}
+
+type Announcement @table {
+  title: String!
+  message: String!
+  publishedAt: Timestamp!
+  expiryDate: Timestamp
+  targetAudience: String
+}
+
+type RouteStop @table(key: ["route", "stop"]) {
+  route: Route!
+  stop: Stop!
+  stopOrder: Int!
+  estimatedTimeAtStop: String
+}
