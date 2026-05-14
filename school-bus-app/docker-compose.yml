@@ -1,6 +1,28 @@
 version: '3.8'
 
 services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: trackbuddy-db
+    restart: always
+    environment:
+      - POSTGRES_USER=trackbuddy
+      - POSTGRES_PASSWORD=trackbuddy_pass
+      - POSTGRES_DB=trackbuddy_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: trackbuddy-cache
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
   trackbuddy:
     build: .
     container_name: trackbuddy-app
@@ -8,19 +30,20 @@ services:
     ports:
       - "3500:3000"
     environment:
-      - DATABASE_URL=file:./dev.db
-      - NEXTAUTH_SECRET=190125@Amgi_Secret # Use a better secret in prod
-      - NEXTAUTH_URL=http://rideshare.com.my
+      - DATABASE_URL=postgresql://trackbuddy:trackbuddy_pass@postgres:5432/trackbuddy_db?schema=public
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=rydesafe-secret-key-12345
+      - NEXTAUTH_SECRET=190125@Amgi_Secret
+      - NEXTAUTH_URL=http://localhost:3500
       - BUKKU_API_KEY=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL3RpYmFzZWxhbWF0LmJ1a2t1Lm15L3NldHRpbmdzL2FwaSIsImlhdCI6MTc3NTgwNTg2OCwibmJmIjoxNzc1ODA1ODY4LCJqdGkiOiI0OHoxVDhFUklheTV0QWFrIiwic3ViIjoiMTA4OTQyIiwicHJ2IjoiMjlmYzhjZTc0ZjVjMGY5MTZjY2E3NGE4NjZiYzhlMzFmZTA2NGQ3YSJ9.ggVSVmeu1UdQ9U8G_OdbNATixDCJ7cIoku-OJYet67o
+    depends_on:
+      - postgres
+      - redis
     volumes:
-      - ./dev.db:/app/dev.db
-      - ./prisma:/app/prisma
+      - .:/app
+      - /app/node_modules
+      - /app/.next
 
-  # Optional: Nginx for SSL (Certbot)
-  # nginx:
-  #   image: nginx:alpine
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #   volumes:
-  #     - ./nginx.conf:/etc/nginx/nginx.conf
+volumes:
+  postgres_data:
+  redis_data:

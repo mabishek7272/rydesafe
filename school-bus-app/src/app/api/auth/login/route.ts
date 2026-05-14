@@ -3,41 +3,84 @@ import prisma from '@/lib/prisma'
 import bcrypt from 'bcryptjs'
 import { signToken } from '@/lib/auth'
 import { cookies } from 'next/headers'
-import { loginSchema, validateBody } from '@/lib/validation'
+import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6),
+})
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const validation = validateBody(loginSchema, body)
-    if (!validation.success) {
-      return NextResponse.json({ error: validation.error }, { status: 400 })
-    }
-    const { email, password } = validation.data
+    const parsed = loginSchema.safeParse(body)
 
-    const user = await prisma.user.findUnique({ where: { email } })
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid email or password format' },
+        { status: 400 }
+      )
+    }
+
+    const { email, password } = parsed.data
+
+    // Fetch user with org/branch context
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        passwordHash: true,
+        role: true,
+        status: true,
+        organisationId: true,
+        branchId: true,
+      },
+    })
 
     if (!user) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 })
     }
 
-    const isMatch = await bcrypt.compare(password, user.password)
+    if (user.status === 'SUSPENDED') {
+      return NextResponse.json({ error: 'Account suspended. Contact your administrator.' }, { status: 403 })
+    }
 
+    if (user.status === 'INACTIVE') {
+      return NextResponse.json({ error: 'Account is inactive.' }, { status: 403 })
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash)
     if (!isMatch) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 })
     }
 
-    const token = await signToken({ id: user.id, role: user.role })
+    // Sign token with full tenant context
+    const token = await signToken({
+      sub: user.id,
+      org: user.organisationId,
+      branch: user.branchId,
+      role: user.role as import('@/lib/auth').UserRole,
+      name: user.name,
+      email: user.email,
+    })
 
-    // Set cookie
+    // Update last login
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    })
+
     const cookieStore = await cookies()
     cookieStore.set('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 60 * 60 * 24, // 1 day
-      path: '/'
+      maxAge: 60 * 60 * 8, // 8 hours
+      path: '/',
     })
 
     return NextResponse.json({
@@ -46,10 +89,12 @@ export async function POST(req: NextRequest) {
         name: user.name,
         email: user.email,
         role: user.role,
-      }
+        organisationId: user.organisationId,
+        branchId: user.branchId,
+      },
     })
   } catch (error) {
-    console.error('Login error:', error)
+    console.error('[auth/login] error:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

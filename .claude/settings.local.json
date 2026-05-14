@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx next *)",
+      "Bash(curl *)",
+      "Bash(npx prisma *)",
+      "Bash(DATABASE_URL=file:./dev.db npx prisma db push)",
+      "Bash(rm -rf node_modules)",
+      "Bash(npm ci *)"
+    ]
+  }
+}

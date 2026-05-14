@@ -9,9 +9,22 @@ export async function POST(req: Request) {
   try {
     const user = await getUserFromSession()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const { tripId, rating, comment } = await req.json()
+    let { tripId, rating, comment } = await req.json()
     if (!tripId || !rating || rating < 1 || rating > 5)
       return NextResponse.json({ error: 'Invalid rating' }, { status: 400 })
+
+    if (tripId === 'latest') {
+      const student = await prisma.student.findFirst({ where: { parentId: user.id } })
+      if (!student || !student.routeId) {
+        return NextResponse.json({ error: 'No student/route found for parent' }, { status: 404 })
+      }
+      const latestTrip = await prisma.trip.findFirst({
+        where: { routeId: student.routeId },
+        orderBy: { date: 'desc' }
+      })
+      if (!latestTrip) return NextResponse.json({ error: 'No recent trip found' }, { status: 404 })
+      tripId = latestTrip.id
+    }
 
     const existing = await prisma.rideRating.findFirst({ where: { tripId, parentId: user.id } })
     if (existing) return NextResponse.json({ error: 'Already rated this trip' }, { status: 409 })

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { getUserFromSession } from '@/lib/auth'
 import { locationSchema, validateBody } from '@/lib/validation'
+import { redisPublisher } from '@/lib/redis'
 
 export const dynamic = 'force-dynamic'
 
@@ -62,6 +63,34 @@ export async function POST(req: NextRequest) {
         currentSpeedKmH: newSpeed
       }
     })
+
+    // Fetch school settings for Geofencing
+    const settings = await prisma.systemSetting.findMany({
+      where: { key: { in: ['schoolLat', 'schoolLng', 'geofenceRadius'] } }
+    })
+    const schoolLat = parseFloat(settings.find(s => s.key === 'schoolLat')?.value || '34.0522')
+    const schoolLng = parseFloat(settings.find(s => s.key === 'schoolLng')?.value || '-118.2437')
+    const geofenceRadiusKm = parseFloat(settings.find(s => s.key === 'geofenceRadius')?.value || '500') / 1000
+
+    const distanceKm = calculateDistance(latitude, longitude, schoolLat, schoolLng);
+    const isNear = distanceKm <= geofenceRadiusKm;
+    const etaMins = Math.round((distanceKm / newSpeed) * 60);
+
+    // Publish to Redis for real-time SSE
+    try {
+      await redisPublisher.publish('location_updates', JSON.stringify({
+        id: user.id,
+        lastLatitude: latitude,
+        lastLongitude: longitude,
+        currentSpeedKmH: newSpeed,
+        lastLocationUpdate: new Date().toISOString(),
+        distanceKm,
+        etaMins,
+        isNear
+      }));
+    } catch (err) {
+      console.error('Failed to publish location update to Redis', err);
+    }
 
     // ── Night Bus / Late-Night Alert ────────────────────────────────────
     const hour = new Date().getHours()

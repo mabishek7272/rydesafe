@@ -1,180 +1,218 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, UserRole, OrganisationType, UserStatus, DriverStatus, VehicleStatus, ScheduleType, ScheduleStatus, TripStatus } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 
 const prisma = new PrismaClient()
 
 async function main() {
-  console.log('Seeding database...')
+  console.log('🚀 Starting TrackBuddy Multi-Tenant Seed...')
 
-  // Clean existing data for clean seed
-  await prisma.attendance.deleteMany()
-  await prisma.notification.deleteMany()
-  await prisma.message.deleteMany()
-  await prisma.trip.deleteMany()
-  await prisma.stop.deleteMany()
-  await prisma.emergencyAlert.deleteMany()
-  await prisma.student.deleteMany()
-  await prisma.bus.deleteMany()
-  await prisma.route.deleteMany()
-  await prisma.user.deleteMany()
-  await prisma.systemSetting.deleteMany()
-
-  // Seed Settings
-  await prisma.systemSetting.create({
-    data: {
-      key: 'PICKUP_TIMES',
-      value: JSON.stringify(['3:00 PM', '4:00 PM', '5:00 PM'])
-    }
-  })
-
-  // Seed Users
   const passwordHash = await bcrypt.hash('password123', 10)
 
-  const admin = await prisma.user.create({
-    data: {
-      name: 'School Admin',
-      email: 'admin@school.com',
+  // 1. Create Super Admin
+  const superAdmin = await prisma.user.upsert({
+    where: { email: 'super@trackbuddy.com' },
+    update: {},
+    create: {
+      email: 'super@trackbuddy.com',
       password: passwordHash,
-      role: 'ADMIN',
-      phone: '+1 555-000-0001'
-    }
+      name: 'TrackBuddy Super Admin',
+      role: UserRole.SUPER_ADMIN,
+      status: UserStatus.ACTIVE,
+    },
   })
+  console.log('✅ Super Admin created')
 
-  const driver = await prisma.user.create({
+  // 2. Create Sample Organisation (School)
+  const schoolOrg = await prisma.organisation.create({
     data: {
+      name: 'Greenwood International School',
+      type: OrganisationType.SCHOOL,
+      settings: {
+        timezone: 'Asia/Kuala_Lumpur',
+        currency: 'MYR',
+        trackingEnabled: true,
+      },
+      brandingConfig: {
+        primaryColor: '#2E7D32',
+        logoUrl: 'https://images.unsplash.com/photo-1546410531-bb4caa19020a?w=200',
+      },
+    },
+  })
+  console.log('✅ Organisation created: Greenwood')
+
+  // 3. Create Branches
+  const primaryBranch = await prisma.branch.create({
+    data: {
+      organisationId: schoolOrg.id,
+      name: 'Primary Campus',
+      address: '123 Education Way, Kuala Lumpur',
+      contactInfo: { phone: '+60 3-1234-5678', email: 'primary@greenwood.edu.my' },
+    },
+  })
+  console.log('✅ Branch created: Primary Campus')
+
+  // 4. Create Org Admin
+  const orgAdmin = await prisma.user.create({
+    data: {
+      email: 'admin@greenwood.edu.my',
+      password: passwordHash,
+      name: 'Mervin Org Admin',
+      role: UserRole.ORG_ADMIN,
+      status: UserStatus.ACTIVE,
+      organisationId: schoolOrg.id,
+    },
+  })
+  console.log('✅ Org Admin created')
+
+  // 5. Create Driver & Profile
+  const driverUser = await prisma.user.create({
+    data: {
+      email: 'driver@greenwood.edu.my',
+      password: passwordHash,
       name: 'John Driver',
-      email: 'driver@school.com',
-      password: passwordHash,
-      role: 'DRIVER',
-      phone: '+1 555-000-0002'
-    }
+      role: UserRole.DRIVER,
+      status: UserStatus.ACTIVE,
+      organisationId: schoolOrg.id,
+    },
   })
 
-  const parent1 = await prisma.user.create({
+  const driverProfile = await prisma.driverProfile.create({
     data: {
-      name: 'Alice Parent',
-      email: 'parent1@school.com',
-      password: passwordHash,
-      role: 'PARENT',
-      phone: '+1 555-111-2222'
-    }
+      userId: driverUser.id,
+      organisationId: schoolOrg.id,
+      licenseNumber: 'L-99887766',
+      licenseExpiry: new Date('2028-12-31'),
+      status: DriverStatus.ACTIVE,
+      address: '45 Driver Lane, KL',
+      emergencyContact: { name: 'Wife', phone: '+60 12-345-6789' },
+    },
   })
+  console.log('✅ Driver created')
 
-  const parent2 = await prisma.user.create({
+  // 6. Create Vehicle
+  const vehicle = await prisma.vehicle.create({
     data: {
-      name: 'Bob Parent',
-      email: 'parent2@school.com',
-      password: passwordHash,
-      role: 'PARENT',
-      phone: '+1 555-333-4444'
-    }
+      organisationId: schoolOrg.id,
+      plateNumber: 'BBA 1234',
+      make: 'Toyota',
+      model: 'Coaster',
+      year: 2022,
+      capacity: 30,
+      status: VehicleStatus.ACTIVE,
+      wialonUnitId: '2564893', // Mock Wialon ID
+    },
   })
+  console.log('✅ Vehicle created')
 
-  // Seed Route
-  const routeA = await prisma.route.create({
+  // 7. Create Route & Stops
+  const route = await prisma.route.create({
     data: {
-      name: 'Morning Route A',
-      morningTime: '7:30 AM',
-      afternoonTime: '3:00 PM'
-    }
+      organisationId: schoolOrg.id,
+      branchId: primaryBranch.id,
+      name: 'Morning Route A1',
+      description: 'Route serving Ampang area',
+      active: true,
+    },
   })
 
-  // Seed Stops
   const stop1 = await prisma.stop.create({
     data: {
-      name: 'Maple Street Corner',
-      latitude: 34.0522,
-      longitude: -118.2437,
-      order: 1,
-      routeId: routeA.id
-    }
+      routeId: route.id,
+      name: 'Ampang Point',
+      address: 'Jalan Ampang, 68000 Ampang',
+      latitude: 3.1581,
+      longitude: 101.7516,
+      sequenceOrder: 1,
+    },
   })
 
   const stop2 = await prisma.stop.create({
     data: {
-      name: 'Oak Avenue Gate',
-      latitude: 34.0530,
-      longitude: -118.2450,
-      order: 2,
-      routeId: routeA.id
-    }
+      routeId: route.id,
+      name: 'Main Gate',
+      address: 'School Entrance',
+      latitude: 3.1600,
+      longitude: 101.7600,
+      sequenceOrder: 2,
+    },
+  })
+  console.log('✅ Route & Stops created')
+
+  // 8. Create Schedule
+  const schedule = await prisma.schedule.create({
+    data: {
+      organisationId: schoolOrg.id,
+      routeId: route.id,
+      vehicleId: vehicle.id,
+      driverId: driverUser.id,
+      type: ScheduleType.RECURRING,
+      recurrenceRule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
+      startTime: '07:00:00',
+      endTime: '08:30:00',
+      status: ScheduleStatus.APPROVED,
+    },
+  })
+  console.log('✅ Schedule created')
+
+  // 9. Create Passenger & Guardian
+  const passenger = await prisma.passenger.create({
+    data: {
+      organisationId: schoolOrg.id,
+      branchId: primaryBranch.id,
+      name: 'Timmy Student',
+      nationality: 'Malaysian',
+      dob: new Date('2015-05-15'),
+      pickupAddress: '42 Residential Dr, Ampang',
+      dropoffAddress: 'School Main Gate',
+      active: true,
+    },
   })
 
-  // Seed Bus
-  const bus1 = await prisma.bus.create({
+  const guardianUser = await prisma.user.create({
     data: {
-      plateNumber: 'BUS-001',
-      capacity: 30,
-      status: 'ACTIVE',
-      driverId: driver.id,
-      routeId: routeA.id
-    }
+      email: 'parent@home.com',
+      password: passwordHash,
+      name: 'Alice Guardian',
+      role: UserRole.PARENT,
+      status: UserStatus.ACTIVE,
+      organisationId: schoolOrg.id,
+    },
   })
 
-  // Seed Trip
-  const trip1 = await prisma.trip.create({
+  const guardian = await prisma.guardian.create({
     data: {
-      routeId: routeA.id,
-      driverId: driver.id,
-      busId: bus1.id,
-      status: 'TRIP_CREATED'
-    }
+      passengerId: passenger.id,
+      userId: guardianUser.id,
+      name: 'Alice Guardian',
+      relationship: 'Mother',
+      phonePrimary: '+60 17-000-1111',
+      isEmergencyContact: true,
+    },
   })
 
-  // Seed Students
-  await prisma.student.create({
+  // Link passenger to schedule
+  await prisma.schedulePassenger.create({
     data: {
-      name: 'Timmy Parent',
-      grade: 'Grade 3',
-      level: 'Primary',
-      parentContact1: parent1.phone!,
-      parentId: parent1.id,
-      pickupTime: '3:00 PM',
-      routeId: routeA.id,
+      scheduleId: schedule.id,
+      passengerId: passenger.id,
       pickupStopId: stop1.id,
-      dropoffStopId: stop2.id
-    }
+      dropoffStopId: stop2.id,
+    },
   })
+  console.log('✅ Passenger & Guardian created')
 
-  await prisma.student.create({
-    data: {
-      name: 'Sarah Parent',
-      grade: 'Grade 1',
-      level: 'Primary',
-      parentContact1: parent2.phone!,
-      parentId: parent2.id,
-      isSelfPickup: true,
-      routeId: routeA.id,
-      pickupStopId: stop2.id,
-      dropoffStopId: stop1.id
-    }
-  })
-
-  await prisma.student.create({
-    data: {
-      name: 'Dave Student (No App Parent)',
-      grade: 'Grade 5',
-      level: 'Middle',
-      parentContact1: '+1 555-999-8888',
-      pickupTime: '4:00 PM',
-      routeId: routeA.id,
-      pickupStopId: stop1.id,
-      dropoffStopId: stop2.id
-    }
-  })
-
-  console.log('Database seeded successfully!')
-  console.log('---------------------------')
-  console.log('Test Accounts (Password: password123)')
-  console.log('Admin : admin@school.com')
-  console.log('Driver: driver@school.com')
-  console.log('Parent: parent1@school.com')
-  console.log('---------------------------')
+  console.log('\n✨ Seeding Complete!')
+  console.log('--------------------------------------------------')
+  console.log('Super Admin: super@trackbuddy.com / password123')
+  console.log('Org Admin  : admin@greenwood.edu.my / password123')
+  console.log('Driver     : driver@greenwood.edu.my / password123')
+  console.log('Parent     : parent@home.com / password123')
+  console.log('--------------------------------------------------')
 }
 
 main()
   .catch((e) => {
-    console.error(e)
+    console.error('❌ Seeding failed:', e)
     process.exit(1)
   })
   .finally(async () => {

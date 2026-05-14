@@ -1,5 +1,7 @@
-// Basic mock Redis client since Redis isn't deployed yet.
-// In a real environment, replace this with ioredis or upstash/redis.
+import Redis from 'ioredis';
+import { EventEmitter } from 'events';
+
+const mockEventBus = new EventEmitter();
 
 class MockRedis {
   private store: Map<string, string> = new Map();
@@ -20,6 +22,38 @@ class MockRedis {
   async del(key: string) {
     this.store.delete(key);
   }
+
+  // Pub/Sub Mock
+  async publish(channel: string, message: string) {
+    mockEventBus.emit('message', channel, message);
+    return 1;
+  }
+
+  async subscribe(channel: string) {
+    return 1;
+  }
+
+  on(event: string, listener: (...args: any[]) => void) {
+    mockEventBus.on(event, listener);
+    return this;
+  }
+
+  off(event: string, listener: (...args: any[]) => void) {
+    mockEventBus.off(event, listener);
+    return this;
+  }
 }
 
-export const redis = new MockRedis();
+const getRedisClient = () => {
+  if (process.env.REDIS_URL) {
+    return new Redis(process.env.REDIS_URL);
+  }
+  return new MockRedis() as unknown as Redis;
+};
+
+// Default client for set/get
+export const redis = getRedisClient();
+
+// Dedicated clients for Pub/Sub (ioredis requires separate clients for sub)
+export const redisPublisher = getRedisClient();
+export const redisSubscriber = getRedisClient();

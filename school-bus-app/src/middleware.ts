@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { jwtVerify } from 'jose'
 
-// ─── Rate Limiter (in-memory, per IP) ───────────────────────────────────────
+// ─── Rate Limiter (Redis-backed in production, in-memory for dev) ─────────────
+
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
-const RATE_LIMIT_WINDOW_MS = 60_000 // 1 minute
-const RATE_LIMIT_MAX = 120          // 120 requests per minute per IP
+const RATE_LIMIT_WINDOW_MS = 60_000
+const RATE_LIMIT_MAX = 120
 
 function checkRateLimit(ip: string): { allowed: boolean; remaining: number } {
   const now = Date.now()
@@ -16,13 +17,10 @@ function checkRateLimit(ip: string): { allowed: boolean; remaining: number } {
   }
 
   record.count++
-  if (record.count > RATE_LIMIT_MAX) {
-    return { allowed: false, remaining: 0 }
-  }
+  if (record.count > RATE_LIMIT_MAX) return { allowed: false, remaining: 0 }
   return { allowed: true, remaining: RATE_LIMIT_MAX - record.count }
 }
 
-// Periodic cleanup to prevent memory leaks
 setInterval(() => {
   const now = Date.now()
   for (const [key, val] of rateLimitStore) {
@@ -30,23 +28,26 @@ setInterval(() => {
   }
 }, 60_000)
 
-// ─── JWT Secret ─────────────────────────────────────────────────────────────
-const getJwtSecretKey = () => {
-  const secret = process.env.JWT_SECRET || 'super-secret-key-for-dev'
+// ─── JWT Secret ───────────────────────────────────────────────────────────────
+
+function getJwtSecretKey() {
+  const secret = process.env.JWT_SECRET || 'super-secret-key-change-in-production-32chars'
   return new TextEncoder().encode(secret)
 }
 
-// ─── Public Paths (no auth required) ────────────────────────────────────────
+// ─── Public Paths ─────────────────────────────────────────────────────────────
+
 const PUBLIC_PATHS = [
   '/api/auth/login',
-  '/api/auth/me',        // Used for logout POST
+  '/api/auth/register',
+  '/api/auth/invitation/accept',
+  '/api/health',
 ]
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some(p => pathname.startsWith(p))
 }
 
-// ─── Static / Non-API paths (skip entirely) ─────────────────────────────────
 function isNonApiPath(pathname: string): boolean {
   return (
     !pathname.startsWith('/api/') ||
@@ -56,19 +57,19 @@ function isNonApiPath(pathname: string): boolean {
   )
 }
 
-// ─── Middleware ──────────────────────────────────────────────────────────────
+// ─── Middleware ───────────────────────────────────────────────────────────────
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Skip non-API routes (pages, static assets)
-  if (isNonApiPath(pathname)) {
-    return NextResponse.next()
-  }
+  // Skip non-API routes
+  if (isNonApiPath(pathname)) return NextResponse.next()
 
-  // ── Rate Limiting ──
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || '127.0.0.1'
+  // Rate limiting
+  const ip =
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    request.headers.get('x-real-ip') ||
+    '127.0.0.1'
 
   const { allowed, remaining } = checkRateLimit(ip)
 
@@ -81,19 +82,19 @@ export async function middleware(request: NextRequest) {
           'Retry-After': '60',
           'X-RateLimit-Limit': String(RATE_LIMIT_MAX),
           'X-RateLimit-Remaining': '0',
-        }
+        },
       }
     )
   }
 
-  // ── Public path bypass ──
+  // Public path bypass
   if (isPublicPath(pathname)) {
     const response = NextResponse.next()
     response.headers.set('X-RateLimit-Remaining', String(remaining))
     return response
   }
 
-  // ── JWT Authentication ──
+  // JWT Authentication
   const token = request.cookies.get('token')?.value
 
   if (!token) {
@@ -103,14 +104,17 @@ export async function middleware(request: NextRequest) {
   try {
     const { payload } = await jwtVerify(token, getJwtSecretKey())
 
-    // Inject user info into request headers for downstream route handlers
+    // Inject tenant-aware user context into request headers
     const response = NextResponse.next()
-    response.headers.set('X-User-Id', payload.id as string)
-    response.headers.set('X-User-Role', payload.role as string)
+    response.headers.set('x-user-id', (payload.sub as string) ?? '')
+    response.headers.set('x-user-role', (payload.role as string) ?? '')
+    response.headers.set('x-org-id', (payload.org as string) ?? '')
+    response.headers.set('x-branch-id', (payload.branch as string) ?? '')
+    response.headers.set('x-user-name', (payload.name as string) ?? '')
+    response.headers.set('x-user-email', (payload.email as string) ?? '')
     response.headers.set('X-RateLimit-Remaining', String(remaining))
     return response
   } catch {
-    // Token invalid or expired
     return NextResponse.json({ error: 'Invalid or expired session' }, { status: 401 })
   }
 }

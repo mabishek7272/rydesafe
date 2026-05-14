@@ -92,8 +92,8 @@ export default function ParentDashboard() {
   }, [])
 
   // Proximity check — if driver location changes significantly, trigger alert
-  const checkBusProximity = (driversData: DriverData[]) => {
-    if (!students[0]?.pickupStop) return
+  const checkBusProximity = (driversData: DriverData[], studentsData: StudentData[]) => {
+    if (!studentsData[0]?.pickupStop) return
     const activeDriver = driversData[0]
     if (!activeDriver?.lastLatitude) return
     // Simulate proximity: if driver lat changed → bus is moving → alert after 3 polls
@@ -119,7 +119,8 @@ export default function ParentDashboard() {
   }, [])
 
   useEffect(() => {
-    const fetchData = async () => {
+    // Initial fetch including location
+    const fetchInitialData = async () => {
       try {
         const [studentsRes, locationRes, notifRes, msgRes] = await Promise.all([
           fetch('/api/students'),
@@ -134,10 +135,29 @@ export default function ParentDashboard() {
 
         if (studentsData.error === 'Unauthorized') { router.push('/'); return }
 
-        setStudents(studentsData.students || [])
+        const currentStudents = studentsData.students || []
+        setStudents(currentStudents)
         const driversData = locationData.drivers || []
         setDrivers(driversData)
-        checkBusProximity(driversData)
+        checkBusProximity(driversData, currentStudents)
+
+        const newNotifs = notificationsData.notifications || []
+        setNotifications(newNotifs)
+        setMessages(msgData.messages || [])
+
+        if (loading) setLoading(false)
+      } catch (error) { console.error(error) }
+    }
+
+    // Interval fetch for notifications & messages only (every 15s)
+    const fetchBackgroundData = async () => {
+      try {
+        const [notifRes, msgRes] = await Promise.all([
+          fetch('/api/notifications'),
+          fetch('/api/messages'),
+        ])
+        const notificationsData = await notifRes.json()
+        const msgData = await msgRes.json()
 
         const newNotifs = notificationsData.notifications || []
         setNotifications(newNotifs)
@@ -160,14 +180,49 @@ export default function ParentDashboard() {
             return latest.id
           })
         }
-        if (loading) setLoading(false)
       } catch (error) { console.error(error) }
     }
-    fetchData()
-    const interval = setInterval(fetchData, 6000)
-    return () => clearInterval(interval)
+
+    fetchInitialData()
+    const interval = setInterval(fetchBackgroundData, 15000)
+
+    // Setup SSE for real-time location updates
+    const evtSource = new EventSource('/api/location/stream')
+    evtSource.onmessage = (event) => {
+      try {
+        const update = JSON.parse(event.data)
+        setDrivers(prevDrivers => {
+          // If we already have the driver in state, update their fields
+          const exists = prevDrivers.some(d => d.id === update.id)
+          const newDrivers = exists 
+            ? prevDrivers.map(d => d.id === update.id ? { ...d, ...update } : d)
+            : [...prevDrivers, update]
+          
+          // Trigger proximity check with updated drivers
+          // We have to use a functional approach or ref to get current students
+          // For simplicity, checkBusProximity relies on the most recent students state.
+          // In React, this is tricky if checkBusProximity captures old students state,
+          // but setDrivers functional update is safe. We will call checkBusProximity in a separate effect
+          return newDrivers
+        })
+      } catch (e) {
+        console.error('SSE Error parsing update:', e)
+      }
+    }
+
+    return () => {
+      clearInterval(interval)
+      evtSource.close()
+    }
     // eslint-disable-next-line
   }, [router])
+
+  // Trigger proximity check when drivers or students change
+  useEffect(() => {
+    if (drivers.length > 0 && students.length > 0) {
+      checkBusProximity(drivers, students)
+    }
+  }, [drivers, students])
 
   const handleLogout = async () => {
     await fetch('/api/auth/me', { method: 'POST' }); router.push('/')
@@ -425,7 +480,7 @@ export default function ParentDashboard() {
                   {[1,2,3,4,5].map(star => (
                     <motion.button key={star} whileHover={{ scale:1.3 }} whileTap={{ scale:0.9 }}
                       onClick={async () => {
-                        const res = await fetch('/api/ratings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ tripId: notifications[0]?.id || 'latest', rating: star }) })
+                        const res = await fetch('/api/ratings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ tripId: 'latest', rating: star }) })
                         if (res.ok) alert(`✅ Thank you! You rated ${star} stars.`)
                         else { const d = await res.json(); alert(d.error || 'Already rated') }
                       }}

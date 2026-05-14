@@ -1,72 +1,585 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// TrackBuddy — Multi-Tenant Prisma Schema
+// Datasource: PostgreSQL (replace SQLite for production)
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(cuid())
-  name      String
-  email     String   @unique
-  password  String
-  role      String
-  phone     String?
-  lastLatitude Float?
-  lastLongitude Float?
-  lastLocationUpdate DateTime?
-  currentSpeedKmH Float?   @default(30.0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  deviceId  String?
-  locale    String?  @default("en")
-  
-  parentStudents Student[] @relation("ParentStudents")
-  trips          Trip[]    @relation("DriverTrips")
-  emergencies    EmergencyAlert[] @relation("DriverEmergencies")
-  bus            Bus?      @relation("DriverBus")
-  notifications  Notification[]
-  sentMessages   Message[] @relation("SentMessages")
-  receivedMessages Message[] @relation("ReceivedMessages")
-  trackingSessions TrackingSession[]
-  payments       Payment[] @relation("ParentPayments")
-  rideRatings    RideRating[] @relation("ParentRatings")
-  lostFoundReports LostFoundItem[] @relation("LostFoundReports")
-  driverShifts   DriverShift[] @relation("DriverShifts")
+// ─── ENUMS ────────────────────────────────────────────────────────────────────
+
+enum OrganisationType {
+  SCHOOL
+  CORPORATE
+  FACTORY
+  CHARTER
 }
 
-model Student {
-  id              String   @id @default(cuid())
-  name            String
-  grade           String
-  level           String
-  dob             DateTime?
-  age             Int?
-  photoUrl        String?
-  parentContact1  String
-  parentContact2  String?
-  isSelfPickup    Boolean  @default(false)
-  pickupTime      String?
-  status          String   @default("PENDING")
-  
-  parentId        String?
-  parent          User?     @relation("ParentStudents", fields: [parentId], references: [id])
-  routeId         String?
-  route           Route?    @relation(fields: [routeId], references: [id])
-  pickupStopId    String?
-  pickupStop      Stop?     @relation("PickupStop", fields: [pickupStopId], references: [id])
-  dropoffStopId   String?
-  dropoffStop     Stop?     @relation("DropoffStop", fields: [dropoffStopId], references: [id])
-  attendances     Attendance[]
-  
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+enum UserRole {
+  SUPER_ADMIN
+  ORG_ADMIN
+  SCHOOL_ADMIN
+  DISPATCHER
+  OPS_MANAGER
+  DRIVER
+  PARENT
 }
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  INVITED
+}
+
+enum DriverStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  UNDER_REVIEW
+}
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+enum ScheduleType {
+  PICKUP
+  DROPOFF
+  RECURRING
+  ONE_TIME
+  EXTRA
+  SPECIAL
+}
+
+enum ScheduleStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum TripStatus {
+  CREATED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TripAction {
+  PICKED_UP
+  DROPPED
+  ABSENT
+  SELF_PICKUP
+  BOARDING
+}
+
+enum NotificationChannel {
+  FCM
+  WHATSAPP
+  EMAIL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum ImportType {
+  EXCEL
+  CSV
+  OCR
+}
+
+enum LogSeverity {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+enum ImportStatus {
+  PENDING
+  PROCESSING
+  PREVIEW_READY
+  APPROVED
+  COMPLETED
+  FAILED
+}
+
+enum MaintenanceStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  OVERDUE
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+}
+
+// ─── TENANT LAYER ─────────────────────────────────────────────────────────────
+
+model Organisation {
+  id           String           @id @default(cuid())
+  name         String
+  type         OrganisationType @default(SCHOOL)
+  logoUrl      String?
+  primaryColor String?
+  settings     Json? // branding, feature flags, etc.
+  active       Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  branches      Branch[]
+  users         User[]
+  passengers    Passenger[]
+  vehicles      Vehicle[]
+  routes        Route[]
+  schedules     Schedule[]
+  trips         Trip[]
+  importJobs    ImportJob[]
+  auditLogs     AuditLog[]
+  notifications NotificationLog[]
+}
+
+model Branch {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+  name           String
+  address        String?
+  contactPhone   String?
+  contactEmail   String?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  users      User[]
+  passengers Passenger[]
+  routes     Route[]
+  schedules  Schedule[]
+}
+
+// ─── USERS & AUTH ─────────────────────────────────────────────────────────────
+
+model User {
+  id             String        @id @default(cuid())
+  organisationId String?
+  organisation   Organisation? @relation(fields: [organisationId], references: [id])
+  branchId       String?
+  branch         Branch?       @relation(fields: [branchId], references: [id])
+
+  name         String
+  email        String     @unique
+  passwordHash String
+  role         UserRole
+  status       UserStatus @default(ACTIVE)
+  phone        String?
+  locale       String?    @default("en")
+  deviceId     String? // for FCM token binding
+  fcmToken     String?
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  driverProfile DriverProfile?
+  notifications NotificationLog[]
+  auditActions  AuditLog[]        @relation("AuditActor")
+  invitations   Invitation[]      @relation("InvitedBy")
+
+  // Trip associations (as driver)
+  tripsAsDriver Trip[]      @relation("TripDriver")
+  tripEvents    TripEvent[] @relation("RecordedBy")
+
+  // Parent link
+  guardianOf Guardian[]
+}
+
+model Invitation {
+  id             String           @id @default(cuid())
+  email          String
+  role           UserRole
+  organisationId String
+  branchId       String?
+  token          String           @unique @default(cuid())
+  status         InvitationStatus @default(PENDING)
+  expiresAt      DateTime
+  invitedById    String
+  invitedBy      User             @relation("InvitedBy", fields: [invitedById], references: [id])
+  createdAt      DateTime         @default(now())
+}
+
+// ─── DRIVER PROFILE ───────────────────────────────────────────────────────────
+
+model DriverProfile {
+  id             String @id @default(cuid())
+  userId         String @unique
+  user           User   @relation(fields: [userId], references: [id])
+  organisationId String
+
+  licenseNumber    String?
+  licenseExpiry    DateTime?
+  licenseImageUrl  String?
+  address          String?
+  emergencyContact String?
+  status           DriverStatus @default(ACTIVE)
+  testingNotes     String?
+
+  vehicleAssignments VehicleAssignment[]
+  driverShifts       DriverShift[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── VEHICLE MANAGEMENT ───────────────────────────────────────────────────────
+
+model Vehicle {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+
+  plateNumber  String
+  make         String?
+  model        String?
+  year         Int?
+  capacity     Int           @default(20)
+  gpsDeviceId  String? // hardware GPS tracker ID
+  wialonUnitId String? // Wialon unit ID for API queries
+  status       VehicleStatus @default(ACTIVE)
+  qrToken      String?
+
+  vehicleAssignments VehicleAssignment[]
+  maintenanceLogs    MaintenanceLog[]
+  trips              Trip[]
+  trackingSessions   TrackingSession[]
+
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  Schedule  Schedule[]
+
+  @@unique([organisationId, plateNumber])
+}
+
+model VehicleAssignment {
+  id              String        @id @default(cuid())
+  vehicleId       String
+  vehicle         Vehicle       @relation(fields: [vehicleId], references: [id])
+  driverProfileId String
+  driverProfile   DriverProfile @relation(fields: [driverProfileId], references: [id])
+  assignedAt      DateTime      @default(now())
+  unassignedAt    DateTime?
+  isPrimary       Boolean       @default(true)
+}
+
+model MaintenanceLog {
+  id            String            @id @default(cuid())
+  vehicleId     String
+  vehicle       Vehicle           @relation(fields: [vehicleId], references: [id])
+  type          String // OIL_CHANGE, TIRE, BRAKE, INSPECTION, OTHER
+  description   String?
+  scheduledDate DateTime
+  completedDate DateTime?
+  status        MaintenanceStatus @default(SCHEDULED)
+  cost          Float?
+  createdAt     DateTime          @default(now())
+}
+
+model TrackingSession {
+  id        String    @id @default(cuid())
+  vehicleId String
+  vehicle   Vehicle   @relation(fields: [vehicleId], references: [id])
+  deviceId  String
+  startTime DateTime  @default(now())
+  endTime   DateTime?
+  status    String    @default("ACTIVE")
+}
+
+// ─── PASSENGER MANAGEMENT ─────────────────────────────────────────────────────
+
+model Passenger {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id])
+
+  name           String
+  photoUrl       String?
+  nationality    String?
+  motherTongue   String?
+  dob            DateTime?
+  grade          String? // for schools
+  pickupAddress  String?
+  dropoffAddress String?
+  notes          String?
+  active         Boolean   @default(true)
+
+  guardians     Guardian[]
+  scheduleItems SchedulePassenger[]
+  tripEvents    TripEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Guardian {
+  id          String    @id @default(cuid())
+  passengerId String
+  passenger   Passenger @relation(fields: [passengerId], references: [id])
+  userId      String? // if guardian has a platform account (PARENT role)
+  user        User?     @relation(fields: [userId], references: [id])
+
+  name               String
+  relationship       String // MOTHER, FATHER, GRANDPARENT, OTHER
+  phonePrimary       String?
+  phoneSecondary     String?
+  email              String?
+  isEmergencyContact Boolean @default(false)
+  isPrimary          Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+// ─── ROUTES & STOPS ───────────────────────────────────────────────────────────
+
+model Route {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id])
+
+  name        String
+  description String?
+  active      Boolean @default(true)
+
+  stops     Stop[]
+  schedules Schedule[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  Trip      Trip[]
+}
+
+model Stop {
+  id        String  @id @default(cuid())
+  routeId   String
+  route     Route   @relation(fields: [routeId], references: [id])
+  name      String
+  latitude  Float
+  longitude Float
+  address   String?
+  sequence  Int
+
+  pickupItems  SchedulePassenger[] @relation("PickupStop")
+  dropoffItems SchedulePassenger[] @relation("DropoffStop")
+  tripEvents   TripEvent[]
+}
+
+// ─── SCHEDULING ───────────────────────────────────────────────────────────────
+
+model Schedule {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id])
+  routeId        String?
+  route          Route?       @relation(fields: [routeId], references: [id])
+  vehicleId      String?
+  vehicle        Vehicle?     @relation(fields: [vehicleId], references: [id])
+  driverUserId   String?
+
+  name           String
+  type           ScheduleType @default(RECURRING)
+  recurrenceRule String? // RRULE string e.g. FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR
+  startTime      String? // HH:MM
+  endTime        String? // HH:MM
+  daysOfWeek     String[]
+  effectiveFrom  DateTime?
+  effectiveTo    DateTime?
+
+  status        ScheduleStatus @default(PENDING_APPROVAL)
+  approvedById  String?
+  approvedAt    DateTime?
+  rejectionNote String?
+  requestNote   String? // note from requester for extra/special trips
+
+  passengers SchedulePassenger[]
+  trips      Trip[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SchedulePassenger {
+  id            String    @id @default(cuid())
+  scheduleId    String
+  schedule      Schedule  @relation(fields: [scheduleId], references: [id])
+  passengerId   String
+  passenger     Passenger @relation(fields: [passengerId], references: [id])
+  pickupStopId  String?
+  pickupStop    Stop?     @relation("PickupStop", fields: [pickupStopId], references: [id])
+  dropoffStopId String?
+  dropoffStop   Stop?     @relation("DropoffStop", fields: [dropoffStopId], references: [id])
+  isSelfPickup  Boolean   @default(false)
+
+  @@unique([scheduleId, passengerId])
+}
+
+// ─── TRIP OPERATIONS ──────────────────────────────────────────────────────────
+
+model Trip {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+  scheduleId     String?
+  schedule       Schedule?    @relation(fields: [scheduleId], references: [id])
+  routeId        String?
+  route          Route?       @relation(fields: [routeId], references: [id])
+  vehicleId      String?
+  vehicle        Vehicle?     @relation(fields: [vehicleId], references: [id])
+  driverUserId   String?
+  driver         User?        @relation("TripDriver", fields: [driverUserId], references: [id])
+
+  date      DateTime   @default(now())
+  status    TripStatus @default(CREATED)
+  startedAt DateTime?
+  endedAt   DateTime?
+  notes     String?
+
+  events      TripEvent[]
+  emergencies EmergencyAlert[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TripEvent {
+  id          String     @id @default(cuid())
+  tripId      String
+  trip        Trip       @relation(fields: [tripId], references: [id])
+  passengerId String?
+  passenger   Passenger? @relation(fields: [passengerId], references: [id])
+  stopId      String?
+  stop        Stop?      @relation(fields: [stopId], references: [id])
+
+  action       TripAction
+  latitude     Float?
+  longitude    Float?
+  photoUrl     String?
+  notes        String?
+  recordedById String?
+  recordedBy   User?      @relation("RecordedBy", fields: [recordedById], references: [id])
+  timestamp    DateTime   @default(now())
+}
+
+// ─── EMERGENCY ────────────────────────────────────────────────────────────────
+
+model EmergencyAlert {
+  id             String    @id @default(cuid())
+  tripId         String?
+  trip           Trip?     @relation(fields: [tripId], references: [id])
+  organisationId String
+  reportedById   String
+  latitude       Float?
+  longitude      Float?
+  description    String?
+  resolved       Boolean   @default(false)
+  resolvedAt     DateTime?
+  source         String    @default("DRIVER")
+  timestamp      DateTime  @default(now())
+}
+
+// ─── DRIVER SHIFTS ────────────────────────────────────────────────────────────
+
+model DriverShift {
+  id              String        @id @default(cuid())
+  driverProfileId String
+  driverProfile   DriverProfile @relation(fields: [driverProfileId], references: [id])
+  date            DateTime
+  startTime       String
+  endTime         String
+  status          String        @default("SCHEDULED")
+  createdAt       DateTime      @default(now())
+}
+
+// ─── NOTIFICATIONS ────────────────────────────────────────────────────────────
+
+model NotificationLog {
+  id             String              @id @default(cuid())
+  organisationId String
+  organisation   Organisation        @relation(fields: [organisationId], references: [id])
+  recipientId    String?
+  recipient      User?               @relation(fields: [recipientId], references: [id])
+  channel        NotificationChannel
+  templateKey    String
+  payloadJson    Json
+  status         NotificationStatus  @default(PENDING)
+  errorMessage   String?
+  sentAt         DateTime?
+  createdAt      DateTime            @default(now())
+}
+
+// ─── BULK IMPORT ──────────────────────────────────────────────────────────────
+
+model ImportJob {
+  id              String       @id @default(cuid())
+  organisationId  String
+  organisation    Organisation @relation(fields: [organisationId], references: [id])
+  type            ImportType
+  filename        String
+  fileUrl         String
+  status          ImportStatus @default(PENDING)
+  totalRows       Int?
+  processedRows   Int?
+  errorRows       Int?
+  errorDetailJson Json?
+  previewJson     Json? // rows extracted, pending review
+  createdById     String
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+// ─── AUDIT LOG ────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+  actorId        String?
+  actor          User?        @relation("AuditActor", fields: [actorId], references: [id])
+  actorRole      String?
+
+  entityType   String // "Passenger", "Trip", "Schedule", etc.
+  entityId     String
+  action       String // "CREATE", "UPDATE", "DELETE", "APPROVE", etc.
+  oldValueJson Json?
+  newValueJson Json?
+  ipAddress    String?
+  userAgent    String?
+  severity     LogSeverity @default(INFO)
+  timestamp    DateTime    @default(now())
+
+  @@index([organisationId, entityType, entityId])
+  @@index([timestamp])
+}
+
+// ─── SYSTEM ───────────────────────────────────────────────────────────────────
 
 model SystemSetting {
   id    String @id @default(cuid())
@@ -74,213 +587,17 @@ model SystemSetting {
   value String
 }
 
-model Attendance {
-  id        String   @id @default(cuid())
-  tripId    String
-  studentId String
-  stopId    String?
-  action    String
-  latitude  Float?
-  longitude Float?
-  timestamp DateTime @default(now())
-  
-  trip      Trip     @relation(fields: [tripId], references: [id])
-  student   Student  @relation(fields: [studentId], references: [id])
-  stop      Stop?    @relation(fields: [stopId], references: [id])
+model AcademicCalendar {
+  id             String    @id @default(cuid())
+  organisationId String
+  branchId       String?
+  title          String
+  description    String?
+  startDate      DateTime
+  endDate        DateTime?
+  type           String    @default("EVENT")
+  isPublic       Boolean   @default(true)
+  color          String?   @default("#1E3A8A")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
-
-model EmergencyAlert {
-  id        String   @id @default(cuid())
-  driverId  String
-  latitude  Float?
-  longitude Float?
-  resolved  Boolean  @default(false)
-  source    String   @default("DRIVER") // DRIVER or PARENT
-  timestamp DateTime @default(now())
-  
-  driver    User     @relation("DriverEmergencies", fields: [driverId], references: [id])
-}
-
-model Bus {
-  id           String   @id @default(cuid())
-  plateNumber  String   @unique
-  capacity     Int
-  status       String   @default("ACTIVE")
-  
-  driverId     String?  @unique
-  driver       User?    @relation("DriverBus", fields: [driverId], references: [id])
-  
-  routeId      String?
-  route        Route?   @relation("RouteBuses", fields: [routeId], references: [id])
-  
-  qrToken      String?
-  
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  
-  trackingSessions TrackingSession[]
-  maintenanceLogs  MaintenanceLog[]
-  trips            Trip[]
-}
-
-model Route {
-  id            String   @id @default(cuid())
-  name          String   @unique
-  morningTime   String?
-  afternoonTime String?
-  
-  buses         Bus[]    @relation("RouteBuses")
-  students      Student[]
-  stops         Stop[]
-  trips         Trip[]
-  
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model Stop {
-  id        String   @id @default(cuid())
-  routeId   String
-  name      String
-  latitude  Float
-  longitude Float
-  order     Int
-  
-  route     Route    @relation(fields: [routeId], references: [id])
-  pickupStudents Student[] @relation("PickupStop")
-  dropoffStudents Student[] @relation("DropoffStop")
-  attendances Attendance[]
-}
-
-model Trip {
-  id        String   @id @default(cuid())
-  routeId   String
-  driverId  String
-  busId     String?
-  status    String   @default("TRIP_CREATED")
-  date      DateTime @default(now())
-  
-  route     Route    @relation(fields: [routeId], references: [id])
-  driver    User     @relation("DriverTrips", fields: [driverId], references: [id])
-  bus       Bus?     @relation(fields: [busId], references: [id])
-  attendances Attendance[]
-  ratings     RideRating[]
-}
-
-model Notification {
-  id        String   @id @default(cuid())
-  userId    String
-  title     String
-  body      String
-  type      String   @default("INFO")
-  read      Boolean  @default(false)
-  createdAt DateTime @default(now())
-  
-  user      User     @relation(fields: [userId], references: [id])
-}
-
-model Message {
-  id          String   @id @default(cuid())
-  senderId    String
-  recipientId String
-  content     String
-  read        Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  
-  sender      User     @relation("SentMessages", fields: [senderId], references: [id])
-  recipient   User     @relation("ReceivedMessages", fields: [recipientId], references: [id])
-}
-
-model TrackingSession {
-  id           String   @id @default(cuid())
-  driverId     String
-  busId        String
-  deviceId     String
-  startTime    DateTime @default(now())
-  endTime      DateTime?
-  status       String   @default("ACTIVE")
-  trackingMode String   @default("HYBRID")
-  
-  driver       User     @relation(fields: [driverId], references: [id])
-  bus          Bus      @relation(fields: [busId], references: [id])
-}
-
-model Payment {
-  id               String   @id @default(cuid())
-  parentId         String
-  bukkuInvoiceId    String?
-  amount           Float
-  status           String   @default("PENDING")
-  dueDate          DateTime?
-  paidAt           DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  
-  parent           User     @relation("ParentPayments", fields: [parentId], references: [id])
-}
-
-// ── New Feature Models ──────────────────────────────────────────────────────
-
-model RideRating {
-  id        String   @id @default(cuid())
-  tripId    String
-  parentId  String
-  rating    Int      // 1-5
-  comment   String?
-  createdAt DateTime @default(now())
-
-  trip      Trip     @relation(fields: [tripId], references: [id])
-  parent    User     @relation("ParentRatings", fields: [parentId], references: [id])
-}
-
-model LostFoundItem {
-  id          String   @id @default(cuid())
-  reportedBy  String
-  description String
-  photoUrl    String?
-  status      String   @default("OPEN") // OPEN, FOUND, CLOSED
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  reporter    User     @relation("LostFoundReports", fields: [reportedBy], references: [id])
-}
-
-model DriverShift {
-  id        String   @id @default(cuid())
-  driverId  String
-  date      DateTime
-  startTime String
-  endTime   String
-  status    String   @default("SCHEDULED") // SCHEDULED, ACTIVE, COMPLETED, CANCELLED
-  createdAt DateTime @default(now())
-
-  driver    User     @relation("DriverShifts", fields: [driverId], references: [id])
-}
-
-model MaintenanceLog {
-  id            String   @id @default(cuid())
-  busId         String
-  type          String   // OIL_CHANGE, TIRE, BRAKE, INSPECTION, OTHER
-  description   String?
-  scheduledDate DateTime
-  completedDate DateTime?
-  status        String   @default("SCHEDULED") // SCHEDULED, IN_PROGRESS, COMPLETED, OVERDUE
-  cost          Float?
-  createdAt     DateTime @default(now())
-
-  bus           Bus      @relation(fields: [busId], references: [id])
-}
-
-model AcademicEvent {
-  id          String   @id @default(cuid())
-  title       String
-  description String?
-  startDate   DateTime
-  endDate     DateTime?
-  type        String   @default("EVENT")      // HOLIDAY, EXAM, EVENT, TERM_START, TERM_END, ASSEMBLY
-  isPublic    Boolean  @default(true)
-  color       String?  @default("#1E3A8A")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-}
-
